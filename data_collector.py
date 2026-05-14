@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-Data collection module - responsible for collecting calibration data.
+Data collection module - UR5 + D405 + ArUco / Checkerboard
 Supports teach-by-demo with keyboard workflow:
-    - Space: detect checkerboard corners for current frame
+    - Space: detect target (ArUco marker / checkerboard corners)
     - Enter: save last successful detection
     - Esc: exit collection loop
 """
@@ -24,15 +24,9 @@ if os.path.isdir(_qt_font_dir):
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from calibration.feature_extractor import CheckerboardExtractor
-from config import APRILTAG_CONFIG, CHECKERBOARD_CONFIG, CALIBRATION_CONFIG, get_data_path
-
-AprilTagDetector: Any = None
-try:
-    from pyapriltags import Detector as _AprilTagDetector
-    AprilTagDetector = _AprilTagDetector
-except ImportError:
-    AprilTagDetector = None
+from calibration.feature_extractor import ArucoDetector, CheckerboardExtractor
+from calibration.transforms import mat_to_pose
+from config import ARUCO_CONFIG, CHECKERBOARD_CONFIG, CALIBRATION_CONFIG, get_data_path
 
 
 class CaptureFrameData(TypedDict, total=False):
@@ -46,7 +40,6 @@ class CaptureFrameData(TypedDict, total=False):
     corners_refined: Optional[np.ndarray]
     tag_pose: np.ndarray
     tag_id: int
-    tag_decision_margin: float
     tag_corners: np.ndarray
 
 
@@ -62,23 +55,24 @@ class SavedFrameData(TypedDict):
 
 
 class CalibDataCollector:
-    """Calibration data collector"""
+    """标定数据采集器 (UR5 + D405 + ArUco)"""
 
-    def __init__(self, robot: Any, camera: Any, mode: str, backend: str = 'checkerboard') -> None:
+    def __init__(self, robot: Any, camera: Any, mode: str, backend: str = 'aruco') -> None:
         """
-        Initialize data collector
+        初始化数据采集器
 
         Args:
-            robot: robot object
-            camera: camera object
-            mode: 'eye_on_hand' or 'eye_to_hand'
+            robot: UR5 机器人对象
+            camera: D405 相机对象
+            mode: 'eye_on_hand' 或 'eye_to_hand'
+            backend: 'aruco' 或 'checkerboard'
         """
         self.robot = robot
         self.camera = camera
         self.mode = mode
         self.backend = backend
 
-        # Checkerboard config
+        # Checkerboard 配置
         cb_size_any = CHECKERBOARD_CONFIG['size']
         cb_size_seq = cast(Sequence[int], cb_size_any)
         cb_cols, cb_rows = int(cb_size_seq[0]), int(cb_size_seq[1])
@@ -86,55 +80,51 @@ class CalibDataCollector:
         self.extractor = CheckerboardExtractor((cb_cols, cb_rows), cb_square)
         self.cb_size: Tuple[int, int] = (cb_cols, cb_rows)
 
-        # Data save path
+        # ArUco 配置
+        aruco_dict = str(ARUCO_CONFIG['dictionary'])
+        aruco_marker_size = float(cast(float, ARUCO_CONFIG['marker_size']))
+        aruco_marker_id = int(cast(int, ARUCO_CONFIG['marker_id']))
+        self.aruco_detector = ArucoDetector(
+            dictionary_name=aruco_dict,
+            marker_size=aruco_marker_size,
+            marker_id=aruco_marker_id
+        )
+
+        # 数据保存路径
         self.data_path = get_data_path(mode)
         self._ensure_dirs()
 
-        # Collection counter
+        # 采集计数器
         self.frame_count = 0
 
-        # Camera intrinsics
+        # 相机内参
         self.intrinsics = camera.intrinsics
-        self.dist_coeffs = np.asarray(getattr(camera, 'dist_coeffs', np.zeros((5, 1))), dtype=np.float64).reshape(-1, 1)
+        self.dist_coeffs = np.asarray(
+            getattr(camera, 'dist_coeffs', np.zeros((5, 1))),
+            dtype=np.float64
+        ).reshape(-1, 1)
 
-        # AprilTag backend config
-        self.apriltag_detector: Optional[Any] = None
-        self.apriltag_family = str(APRILTAG_CONFIG['family'])
-        self.apriltag_size = float(cast(float, APRILTAG_CONFIG['tag_size']))
-        self.apriltag_id = int(cast(int, APRILTAG_CONFIG['target_tag_id']))
-        self.apriltag_margin_th = float(cast(float, APRILTAG_CONFIG['decision_margin_threshold']))
-        self.apriltag_min_area_ratio = float(cast(float, APRILTAG_CONFIG['min_area_ratio']))
-
-        if self.backend == 'apriltag':
-            if AprilTagDetector is None:
-                raise ImportError("未安装 pyapriltags，无法使用 AprilTag 后端")
-            self.apriltag_detector = AprilTagDetector(families=self.apriltag_family)
-
-        # Real-time preview control
+        # 实时预览控制
         self._preview_active = False
-        self._preview_thread = None
-        self._latest_frame = None
+        self._preview_thread: Optional[threading.Thread] = None
+        self._latest_frame: Optional[np.ndarray] = None
         self._frame_lock = threading.Lock()
 
-        # Latest validated detection from Space key, consumed by Enter key
+        # 最新有效的检测结果, Space 触发检测, Enter 触发保存
         self._pending_detection: Optional[CaptureFrameData] = None
         min_pts = CALIBRATION_CONFIG.get('min_calibration_points', 6)
         self.min_frames_required = max(6, int(cast(int, min_pts)))
 
-        
-
     def _ensure_dirs(self) -> None:
-        """Ensure data directories exist"""
+        """确保数据目录存在"""
         os.makedirs(self.data_path['poses'], exist_ok=True)
         os.makedirs(self.data_path['images'], exist_ok=True)
 
     def clear_old_data(self) -> None:
-        """Clear old calibration data before starting a new collection"""
+        """清理旧标定数据"""
         for dir_key in ['poses', 'images']:
             dir_path = self.data_path.get(dir_key)
             if dir_path and os.path.exists(dir_path):
-                # We could delete the entire directory and recreate it
-                # or just delete all files and subdirectories in it
                 for filename in os.listdir(dir_path):
                     file_path = os.path.join(dir_path, filename)
                     try:
@@ -145,9 +135,8 @@ class CalibDataCollector:
         print("已清理历史采集数据。")
 
     def get_frame_index(self) -> int:
-        """Get next frame index"""
-        # Find existing max index
-        existing = []
+        """获取下一个帧索引"""
+        existing: List[int] = []
         poses_dir = self.data_path['poses']
         if os.path.exists(poses_dir):
             for f in os.listdir(poses_dir):
@@ -159,33 +148,30 @@ class CalibDataCollector:
             return max(existing) + 1
         return 1
 
+    # ==================== 采集与检测 ====================
+
     def capture_and_detect(self) -> 'CaptureFrameData':
         """
-        Capture one frame and detect corners
+        采集一帧并检测目标
 
         Returns:
-            dict: {
-                'success': bool,
-                'rgb': RGB image,
-                'depth': depth map,
-                'corners': corner coordinates,
-                'corners_refined': sub-pixel corners,
-                'rgb_image_path': RGB image save path,
-                'depth_image_path': depth image save path
-            }
+            CaptureFrameData: 检测结果
         """
-        # Get image
         rgb, depth = self.camera.get_data()
         if rgb is None or depth is None:
-            return {'success': False}
+            return {
+                'success': False,
+                'rgb': np.zeros((1, 1, 3), dtype=np.uint8),
+                'depth': np.zeros((1, 1)),
+                'corners': None,
+                'corners_refined': None
+            }
 
-        # Convert to grayscale
+        if self.backend == 'aruco':
+            return self._capture_and_detect_aruco(rgb, depth)
+
+        # Checkerboard 后端
         gray = cv2.cvtColor(rgb, cv2.COLOR_BGR2GRAY)
-
-        if self.backend == 'apriltag':
-            return self._capture_and_detect_apriltag(rgb, depth, gray)
-
-        # Detect checkerboard corners
         success, corners, corners_refined = self.extractor.detect_corners(gray, refine=True)
 
         if not success:
@@ -205,61 +191,19 @@ class CalibDataCollector:
             'corners_refined': corners_refined
         }
 
-    def _capture_and_detect_apriltag(
+    def _capture_and_detect_aruco(
         self,
         rgb: np.ndarray,
-        depth: np.ndarray,
-        gray: np.ndarray
+        depth: np.ndarray
     ) -> 'CaptureFrameData':
-        """Detect AprilTag on undistorted image and use pyapriltags direct pose output."""
-        if self.apriltag_detector is None:
-            return {'success': False, 'rgb': rgb, 'depth': depth}
-
-        h, w = gray.shape
-        intrinsics = np.asarray(self.intrinsics, dtype=np.float64)
-        new_k, _ = cv2.getOptimalNewCameraMatrix(
-            intrinsics,
-            self.dist_coeffs,
-            (w, h),
-            alpha=0,
-            newImgSize=(w, h)
+        """使用 OpenCV ArUco 模块检测标记并估计位姿"""
+        result = self.aruco_detector.detect_marker(
+            rgb,
+            self.intrinsics,
+            self.dist_coeffs
         )
 
-        undistorted_gray = cv2.undistort(gray, intrinsics, self.dist_coeffs, None, new_k)
-        undistorted_rgb = cv2.undistort(rgb, intrinsics, self.dist_coeffs, None, new_k)
-
-        camera_params = [
-            float(new_k[0, 0]),
-            float(new_k[1, 1]),
-            float(new_k[0, 2]),
-            float(new_k[1, 2]),
-        ]
-
-        detections = self.apriltag_detector.detect(
-            undistorted_gray,
-            estimate_tag_pose=True,
-            camera_params=camera_params,
-            tag_size=self.apriltag_size
-        )
-
-        target = None
-        for det in detections:
-            if int(det.tag_id) != self.apriltag_id:
-                continue
-            margin = float(getattr(det, 'decision_margin', 0.0))
-            corners_2d = np.asarray(det.corners, dtype=np.float64).reshape(-1, 2)
-            if corners_2d.shape[0] != 4:
-                continue
-            poly_area = float(abs(cv2.contourArea(corners_2d.astype(np.float32))))
-            area_ratio = poly_area / float(w * h)
-            if margin < self.apriltag_margin_th:
-                continue
-            if area_ratio < self.apriltag_min_area_ratio:
-                continue
-            target = det
-            break
-
-        if target is None:
+        if not result['success']:
             return {
                 'success': False,
                 'rgb': rgb,
@@ -268,111 +212,116 @@ class CalibDataCollector:
                 'corners_refined': None
             }
 
-        tag_pose = np.eye(4, dtype=np.float64)
-        tag_pose[:3, :3] = np.asarray(target.pose_R, dtype=np.float64).reshape(3, 3)
-        tag_pose[:3, 3] = np.asarray(target.pose_t, dtype=np.float64).reshape(3)
-
         return {
             'success': True,
             'rgb': rgb,
-            'display_rgb': undistorted_rgb,
+            'display_rgb': rgb,
             'depth': depth,
-            'tag_pose': tag_pose,
-            'tag_id': int(target.tag_id),
-            'tag_decision_margin': float(getattr(target, 'decision_margin', 0.0)),
-            'tag_corners': np.asarray(target.corners, dtype=np.float32).reshape(-1, 2),
+            'tag_pose': result['tag_pose'],
+            'tag_id': result['tag_id'],
+            'tag_corners': result['tag_corners'],
             'corners': None,
             'corners_refined': None
         }
 
+    # ==================== 保存数据 ====================
+
     def save_frame(self, frame_data: 'CaptureFrameData') -> bool:
         """
-        Save one frame of data
+        保存一帧标定数据
 
         Args:
-            frame_data: data returned by capture_and_detect
+            frame_data: capture_and_detect 返回的数据
 
         Returns:
-            bool: whether save is successful
+            bool: 是否保存成功
         """
         if not frame_data.get('success', False):
-            print("  [X] Corner detection failed, cannot save")
+            print("  [X] 目标检测失败，无法保存")
             return False
 
-        # Get frame index
         idx = self.get_frame_index()
 
-        # 1. Save TCP pose
+        # 1. 保存 TCP 位姿 (4x4 齐次矩阵)
         tcp_pose = self.robot.get_transform_matrix()
+        tcp_xyz_rxyz = mat_to_pose(tcp_pose)
+        print(f"  [机械臂TCP] xyz=({tcp_xyz_rxyz[0]:.4f}, {tcp_xyz_rxyz[1]:.4f}, {tcp_xyz_rxyz[2]:.4f}) "
+              f"rx={tcp_xyz_rxyz[3]:.4f} ry={tcp_xyz_rxyz[4]:.4f} rz={tcp_xyz_rxyz[5]:.4f}")
         tcp_path = os.path.join(self.data_path['poses'], f'tcp_{idx:03d}.txt')
         np.savetxt(tcp_path, tcp_pose, delimiter=' ')
-        print(f"  TCP pose saved: {tcp_path}")
+        print(f"  TCP 位姿已保存: {tcp_path}")
 
-        # 2. Save detection payload
-        if self.backend == 'apriltag':
+        # 2. 保存 ArUco 检测结果
+        if self.backend == 'aruco':
             tag_pose = np.asarray(frame_data.get('tag_pose'), dtype=np.float64)
             if tag_pose.shape != (4, 4):
-                print("  [X] AprilTag pose 无效，不能保存")
+                print("  [X] ArUco 位姿无效，不能保存")
                 return False
+            tag_xyz_rxyz = mat_to_pose(tag_pose)
+            print(f"  [Tag位姿]   xyz=({tag_xyz_rxyz[0]:.4f}, {tag_xyz_rxyz[1]:.4f}, {tag_xyz_rxyz[2]:.4f}) "
+                  f"rx={tag_xyz_rxyz[3]:.4f} ry={tag_xyz_rxyz[4]:.4f} rz={tag_xyz_rxyz[5]:.4f}")
             tag_pose_path = os.path.join(self.data_path['poses'], f'tag_pose_{idx:03d}.txt')
             np.savetxt(tag_pose_path, tag_pose, delimiter=' ')
-            print(f"  Tag pose saved: {tag_pose_path}")
+            print(f"  ArUco 位姿已保存: {tag_pose_path}")
 
             tag_corners = frame_data.get('tag_corners')
             if tag_corners is not None:
-                tag_corners_path = os.path.join(self.data_path['poses'], f'tag_corners_{idx:03d}.txt')
-                np.savetxt(tag_corners_path, np.asarray(tag_corners).reshape(-1, 2), delimiter=' ')
+                tag_corners_path = os.path.join(
+                    self.data_path['poses'], f'tag_corners_{idx:03d}.txt'
+                )
+                np.savetxt(
+                    tag_corners_path,
+                    np.asarray(tag_corners).reshape(-1, 2),
+                    delimiter=' '
+                )
         else:
-            corners = frame_data['corners_refined']
+            # 保存棋盘格角点
+            corners = frame_data.get('corners_refined')
             if corners is None:
-                print("  [X] Corner detection payload 无效，不能保存")
+                print("  [X] 角点检测数据无效，不能保存")
                 return False
             corners_path = os.path.join(self.data_path['poses'], f'corners_{idx:03d}.txt')
             corners_reshaped = corners.reshape(-1, 2)
             np.savetxt(corners_path, corners_reshaped, delimiter=' ')
-            print(f"  Corner coordinates saved: {corners_path}")
+            print(f"  角点坐标已保存: {corners_path}")
 
-        # 3. Save RGB image
+        # 3. 保存 RGB 图像
         rgb_path = os.path.join(self.data_path['images'], f'rgb_{idx:03d}.png')
         cv2.imwrite(rgb_path, frame_data['rgb'])
-        print(f"  RGB image saved: {rgb_path}")
+        print(f"  RGB 图像已保存: {rgb_path}")
 
-        # 4. Save depth image
+        # 4. 保存深度图
         depth_path = os.path.join(self.data_path['images'], f'depth_{idx:03d}.npy')
         np.save(depth_path, frame_data['depth'])
-        print(f"  Depth image saved: {depth_path}")
+        print(f"  深度图已保存: {depth_path}")
 
         self.frame_count += 1
-        print(f"  [OK] Frame {idx} saved (total {self.frame_count} frames)")
+        print(f"  [OK] 第 {idx} 帧已保存 (共 {self.frame_count} 帧)")
 
         return True
 
+    # ==================== 交互操作 ====================
+
     def detect_current_frame(self) -> bool:
-        """Capture one frame, detect corners, and show the result for user confirmation."""
+        """采集一帧并检测, 显示结果供用户确认"""
         frame_data = self.capture_and_detect()
         if not frame_data['success']:
             self._pending_detection = None
-            print("[X] Corner detection failed. Please adjust board pose/light and try Space again.")
+            print("[X] 目标检测失败。请调整位姿/光照后重试 Space。")
             return False
 
         self._pending_detection = frame_data
         self._show_detection_result(frame_data)
-        print("[OK] Corner detection success. Press Enter to save this frame.")
+        print("[OK] 目标检测成功。按 Enter 保存当前帧。")
         return True
 
     def _show_detection_result(self, frame_data: 'CaptureFrameData') -> None:
-        """
-        Show corner detection result
-
-        Args:
-            frame_data: frame data
-        """
+        """显示检测结果可视化"""
         rgb = frame_data.get('display_rgb', frame_data['rgb']).copy()
 
-        if self.backend == 'apriltag':
+        if self.backend == 'aruco':
             tag_corners = frame_data.get('tag_corners')
             tag_id = frame_data.get('tag_id', -1)
-            tag_margin = frame_data.get('tag_decision_margin', 0.0)
             if tag_corners is None:
                 return
             pts = np.asarray(tag_corners, dtype=np.int32).reshape(-1, 2)
@@ -381,80 +330,65 @@ class CalibDataCollector:
             cv2.circle(rgb, tuple(center), 6, (0, 0, 255), -1)
             cv2.putText(
                 rgb,
-                f'ID={tag_id} margin={float(tag_margin):.1f}',
+                f'ArUco ID={tag_id}',
                 (int(center[0]) + 10, int(center[1]) - 10),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.6,
                 (0, 255, 255),
                 2
             )
-            cv2.imshow('Corner Detection Result', rgb)
+            cv2.imshow('ArUco Detection Result', rgb)
             cv2.waitKey(100)
             return
 
-        corners = frame_data['corners_refined']
+        # Checkerboard 可视化
+        corners = frame_data.get('corners_refined')
         if corners is None:
             return
 
-        # Draw corners
         cv2.drawChessboardCorners(rgb, self.cb_size, corners, True)
 
-        # Mark start/end corner to make corner ordering explicit.
         if corners is not None and len(corners) > 0:
             start_pt = tuple(corners[0, 0].astype(int))
             end_pt = tuple(corners[-1, 0].astype(int))
-
             cv2.circle(rgb, start_pt, 9, (0, 255, 255), -1)
-            cv2.putText(
-                rgb,
-                'START',
-                (start_pt[0] + 8, start_pt[1] - 8),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (0, 255, 255),
-                2
-            )
-
+            cv2.putText(rgb, 'START', (start_pt[0] + 8, start_pt[1] - 8),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
             cv2.circle(rgb, end_pt, 9, (255, 0, 255), -1)
-            cv2.putText(
-                rgb,
-                'END',
-                (end_pt[0] + 8, end_pt[1] - 8),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (255, 0, 255),
-                2
-            )
+            cv2.putText(rgb, 'END', (end_pt[0] + 8, end_pt[1] - 8),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 255), 2)
 
-        # Display
-        cv2.imshow('Corner Detection Result', rgb)
+        cv2.imshow('Checkerboard Detection Result', rgb)
         cv2.waitKey(100)
 
+    # ==================== 预览与采集循环 ====================
+
     def _preview_loop(self) -> None:
-        """Background thread: real-time camera image display"""
-        # Create resizable window
+        """后台线程: 实时相机图像显示"""
         cv2.namedWindow('Camera Preview', cv2.WINDOW_NORMAL)
 
         while self._preview_active:
             try:
-                rgb, depth = self.camera.get_data()
+                rgb, _depth = self.camera.get_data()
 
-                # Check image validity (fix black screen issue)
                 if rgb is None or rgb.size == 0 or rgb.mean() < 1.0:
                     time.sleep(0.05)
                     continue
 
-                # Save latest frame for main thread
                 with self._frame_lock:
                     self._latest_frame = rgb.copy()
 
-                # Display real-time preview
                 preview = rgb.copy()
-                target_hint = "Space: detect target  Enter: save  Esc: exit"
+                backend_label = "ArUco" if self.backend == 'aruco' else "Checkerboard"
+                target_hint = f"Space: detect {backend_label}  Enter: save  Esc: exit"
                 cv2.putText(preview, target_hint, (10, 30),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-                cv2.putText(preview, f"Collected: {self.frame_count} / Min: {self.min_frames_required}", (10, 60),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 200, 0), 2)
+                cv2.putText(
+                    preview,
+                    f"Collected: {self.frame_count} / Min: {self.min_frames_required}",
+                    (10, 60),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 200, 0), 2
+                )
                 cv2.imshow('Camera Preview', preview)
                 cv2.waitKey(1)
             except Exception as e:
@@ -464,7 +398,7 @@ class CalibDataCollector:
         cv2.destroyWindow('Camera Preview')
 
     def _update_preview_once(self) -> int:
-        """Render one preview frame in main thread and return keyboard key code."""
+        """渲染一帧预览并返回按键码"""
         try:
             rgb, _ = self.camera.get_data()
             if rgb is None or rgb.size == 0 or rgb.mean() < 1.0:
@@ -474,11 +408,16 @@ class CalibDataCollector:
                 self._latest_frame = rgb.copy()
 
             preview = rgb.copy()
-            target_hint = "Space: detect target  Enter: save  Esc: exit"
+            backend_label = "ArUco" if self.backend == 'aruco' else "Checkerboard"
+            target_hint = f"Space: detect {backend_label}  Enter: save  Esc: exit"
             cv2.putText(preview, target_hint, (10, 30),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-            cv2.putText(preview, f"Collected: {self.frame_count} / Min: {self.min_frames_required}", (10, 60),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 200, 0), 2)
+            cv2.putText(
+                preview,
+                f"Collected: {self.frame_count} / Min: {self.min_frames_required}",
+                (10, 60),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 200, 0), 2
+            )
             cv2.imshow('Camera Preview', preview)
         except Exception as e:
             print(f"Preview error: {e}")
@@ -486,91 +425,92 @@ class CalibDataCollector:
         return cv2.waitKey(30) & 0xFF
 
     def start_preview(self) -> None:
-        """Prepare preview window (UI is updated in main thread)."""
+        """启动预览窗口"""
         if self._preview_active:
             return
 
         self._preview_active = True
         cv2.namedWindow('Camera Preview', cv2.WINDOW_NORMAL)
-        print("Real-time preview started")
+        print("实时预览已启动")
 
     def stop_preview(self) -> None:
-        """Stop real-time preview thread"""
+        """停止实时预览"""
         self._preview_active = False
         if self._preview_thread:
             self._preview_thread.join(timeout=1.0)
             self._preview_thread = None
         cv2.destroyAllWindows()
-        print("Real-time preview stopped")
+        print("实时预览已停止")
 
     def get_latest_frame(self) -> Optional[np.ndarray]:
-        """Get latest frame image"""
+        """获取最新帧图像"""
         with self._frame_lock:
             return self._latest_frame.copy() if self._latest_frame is not None else None
 
     def collect_loop(self) -> int:
         """
-        Loop collection mode:
-        Repeatedly execute single frame collection until user chooses to exit
+        循环采集模式: 反复执行单帧采集直到用户选择退出
 
         Returns:
-            int: total frames collected
+            int: 采集的总帧数
         """
         print("\n" + "=" * 50)
-        print("Start Loop Collection")
+        print("开始循环采集")
         print("=" * 50)
-        target_name = "AprilTag" if self.backend == 'apriltag' else "checkerboard corners"
-        print("At each position:")
-        print("  1. Move robot to new position (teach by demo)")
-        print(f"  2. Press Space to detect {target_name}")
-        print("  3. Press Enter to save current valid detection")
-        print("  4. Press Esc to exit collection")
-        print(f"  Minimum recommended frames: {self.min_frames_required}")
-        print("  Preview window continuously shows camera image")
+        backend_label = "ArUco" if self.backend == 'aruco' else "checkerboard corners"
+        print("在每个位置:")
+        print("  1. 移动 UR5 到新位置 (示教)")
+        print(f"  2. 按 Space 检测 {backend_label}")
+        print("  3. 按 Enter 保存当前有效检测")
+        print("  4. 按 Esc 退出采集")
+        print(f"  最少推荐帧数: {self.min_frames_required}")
+        print("  预览窗口持续显示相机画面")
         print("=" * 50)
 
-        # Start preview window in main thread
+        # 启动预览窗口
         self.start_preview()
 
         while True:
             key = self._update_preview_once()
 
-            # Esc exits collection mode
+            # Esc 退出采集模式
             if key == 27:
-                print("\nESC pressed. Exiting collection mode.")
+                print("\nESC 按下。退出采集模式。")
                 break
 
-            # Space triggers detection preview
+            # Space 触发检测预览
             if key == ord(' '):
                 self.detect_current_frame()
 
-            # Enter saves latest valid detection
+            # Enter 保存最新有效检测
             elif key in (13, 10):
                 if self._pending_detection is None:
-                    print("[!] No valid detection to save. Press Space first.")
+                    print("[!] 没有有效检测可保存。请先按 Space 检测。")
                     continue
 
                 saved = self.save_frame(self._pending_detection)
                 if saved:
                     self._pending_detection = None
-                    cv2.destroyWindow('Corner Detection Result')
+                    detection_win = 'ArUco Detection Result' if self.backend == 'aruco' else 'Checkerboard Detection Result'
+                    cv2.destroyWindow(detection_win)
 
             time.sleep(0.01)
 
-        # Stop real-time preview
         self.stop_preview()
 
-        print(f"\nCollection complete, total {self.frame_count} frames")
+        print(f"\n采集完成，共 {self.frame_count} 帧")
         if self.frame_count < self.min_frames_required:
-            print(f"[!] Collected frames < recommended minimum ({self.min_frames_required}).")
+            print(f"[!] 采集帧数 < 推荐最小值 ({self.min_frames_required})。")
         return self.frame_count
+
+    # ==================== 数据读取 ====================
 
     def get_saved_data(self) -> List['SavedFrameData']:
         """
-        Get all saved data
+        获取所有已保存的数据
 
         Returns:
-            list: [{'tcp': 4x4 matrix, 'corners': corners, 'rgb': RGB image, 'depth': depth map}, ...]
+            list: [{'tcp': 4x4 矩阵, 'corners': 角点, 'tag_pose': 标记位姿, ...}, ...]
         """
         data: List[SavedFrameData] = []
         poses_dir = self.data_path['poses']
@@ -579,30 +519,30 @@ class CalibDataCollector:
         if not os.path.exists(poses_dir):
             return data
 
-        # Get all TCP files
         tcp_files = sorted([f for f in os.listdir(poses_dir) if f.startswith('tcp_')])
 
         for tcp_file in tcp_files:
             idx = tcp_file.split('_')[1].split('.')[0]
 
-            # Load TCP pose
+            # 加载 TCP 位姿
             tcp_path = os.path.join(poses_dir, tcp_file)
             tcp = np.loadtxt(tcp_path)
 
-            # Load corners
+            # 加载角点
             corners_path = os.path.join(poses_dir, f'corners_{idx}.txt')
             if os.path.exists(corners_path):
                 corners = np.loadtxt(corners_path).reshape(-1, 1, 2)
             else:
                 corners = None
 
+            # 加载 ArUco 位姿
             tag_pose_path = os.path.join(poses_dir, f'tag_pose_{idx}.txt')
             if os.path.exists(tag_pose_path):
                 tag_pose = np.loadtxt(tag_pose_path)
             else:
                 tag_pose = None
 
-            # Load images
+            # 加载图像
             rgb_path = os.path.join(images_dir, f'rgb_{idx}.png')
             rgb = cv2.imread(rgb_path) if os.path.exists(rgb_path) else None
 

@@ -18,7 +18,7 @@ from calibration.transforms import pose_to_mat
 
 
 class ResultVisualizer:
-    """Calibration result visualizer - Unified to UR3 base coordinate system"""
+    """Calibration result visualizer - Unified to UR5 base coordinate system"""
 
     def __init__(self, mode: str) -> None:
         """
@@ -154,7 +154,7 @@ class ResultVisualizer:
         ax.set_zlabel('Z (m)', fontsize=12)
 
         mode_name = "Eye-on-Hand" if self.mode == "eye_on_hand" else "Eye-to-Hand"
-        ax.set_title(f'{mode_name} Calibration Result\n(Unified coordinate: UR3 Base)', fontsize=14)
+        ax.set_title(f'{mode_name} Calibration Result\n(Unified coordinate: UR5 Base)', fontsize=14)
 
         # Build explicit legend for points and axis-color meanings.
         legend_handles = [

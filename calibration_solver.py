@@ -180,7 +180,7 @@ class CalibrationSolver:
         for d_any in saved_data:
             d = cast(Dict[str, Any], d_any)
             tcp = d['tcp']
-            if self.backend == 'apriltag':
+            if self.backend in ('aruco', 'apriltag'):
                 tag_pose = d.get('tag_pose')
                 if tag_pose is None:
                     print(f"  警告: 帧 {d['index']} 缺少 tag_pose，跳过")

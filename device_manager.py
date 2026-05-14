@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-设备管理器 - 负责连接和管理 UR3 机械臂与 RealSense 相机
+设备管理器 - 负责连接和管理 UR5 机械臂与 RealSense 相机
 """
 
 import numpy as np
@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from robot.ur_robot import URRobot
 from camera.realsense import RealSenseCamera
-from config import UR3_CONFIG, REALSENSE_CONFIG
+from config import UR5_CONFIG, REALSENSE_CONFIG
 
 
 class DeviceManager:
@@ -35,7 +35,7 @@ class DeviceManager:
         连接设备
 
         Args:
-            robot_ip: UR3 IP地址
+            robot_ip: UR5 IP地址
             connect_robot: 是否连接机械臂
             connect_camera: 是否连接相机
 
@@ -51,9 +51,9 @@ class DeviceManager:
         # 连接机械臂
         if connect_robot:
             if robot_ip is None:
-                robot_ip = cast(str, UR3_CONFIG['tcp_host_ip'])
-            tcp_port = int(cast(int, UR3_CONFIG['tcp_port']))
-            print(f"\n[1/2] 连接 UR3 机械臂: {robot_ip} ...")
+                robot_ip = cast(str, UR5_CONFIG['tcp_host_ip'])
+            tcp_port = int(cast(int, UR5_CONFIG['tcp_port']))
+            print(f"\n[1/2] 连接 UR5 机械臂: {robot_ip} ...")
             try:
                 self.robot = URRobot(robot_ip, tcp_port)
                 # 测试连接
