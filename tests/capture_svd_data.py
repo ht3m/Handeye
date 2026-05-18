@@ -12,8 +12,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from camera.realsense import RealSenseCamera
-from config import get_svd_data_path
+from handeye.camera.realsense import RealSenseCamera
+from handeye.config import get_svd_data_path
 
 
 def _next_index(images_dir: str) -> int:

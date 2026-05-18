@@ -10,7 +10,7 @@ import numpy as np
 from scipy import optimize
 from scipy.optimize import OptimizeResult
 from typing import List, Optional, Tuple
-from calibration.transforms import mat_to_pose, pose_to_mat, invert_transform
+from handeye.calibration.transforms import mat_to_pose, pose_to_mat, invert_transform
 
 
 class HandEyeSolver:

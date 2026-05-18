@@ -29,8 +29,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from camera.realsense import RealSenseCamera
-from config import APRILTAG_TEST_CONFIG, UR3_CONFIG
+from handeye.camera.realsense import RealSenseCamera
+from handeye.config import APRILTAG_TEST_CONFIG, UR3_CONFIG
 
 
 @dataclass

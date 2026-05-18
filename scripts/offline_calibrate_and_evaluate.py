@@ -9,16 +9,18 @@ from typing import Any, Dict, List, Optional
 import cv2
 import numpy as np
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 
-from calibration_solver import CalibrationSolver  # noqa: E402
-from config import (  # noqa: E402
+from handeye.calibration_solver import CalibrationSolver  # noqa: E402
+from handeye.config import (  # noqa: E402
     CALIBRATION_BACKEND,
     CALIBRATION_MODE,
     get_data_path,
     validate_calibration_settings,
 )
-from error_calculator import ErrorCalculator  # noqa: E402
+from handeye.error_calculator import ErrorCalculator  # noqa: E402
 
 
 class OfflineDataCollector:

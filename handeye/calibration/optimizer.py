@@ -10,7 +10,7 @@ from scipy import optimize
 from scipy.optimize import OptimizeResult
 from typing import List, Optional, Tuple
 
-from calibration.solver_axxb import HandEyeSolver
+from handeye.calibration.solver_axxb import HandEyeSolver
 
 
 class HandEyeOptimizer:

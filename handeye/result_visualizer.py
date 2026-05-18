@@ -8,13 +8,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 from matplotlib.lines import Line2D
-import sys
-import os
 from typing import Any, List, Optional
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
-from calibration.transforms import pose_to_mat
+from handeye.calibration.transforms import pose_to_mat
 
 
 class ResultVisualizer:

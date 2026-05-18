@@ -6,14 +6,10 @@
 
 import numpy as np
 import cv2
-import sys
-import os
 from typing import Dict, List, Optional, cast
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
-from config import CHECKERBOARD_CONFIG, REALSENSE_CONFIG
-from calibration.transforms import invert_transform, pose_to_mat
+from handeye.config import CHECKERBOARD_CONFIG, REALSENSE_CONFIG
+from handeye.calibration.transforms import invert_transform, pose_to_mat
 
 
 class ErrorCalculator:

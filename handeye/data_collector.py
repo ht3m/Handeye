@@ -10,7 +10,6 @@ Supports teach-by-demo with keyboard workflow:
 """
 
 import os
-import sys
 from typing import Any, Dict, List, Optional, Sequence, Tuple, TypedDict, cast
 import numpy as np
 import cv2
@@ -23,11 +22,9 @@ if os.path.isdir(_qt_font_dir):
     os.environ.setdefault("QT_QPA_FONTDIR", _qt_font_dir)
     os.environ.setdefault("OPENCV_QT_FONTDIR", _qt_font_dir)
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
-from calibration.feature_extractor import ArucoDetector, CheckerboardExtractor
-from calibration.transforms import mat_to_pose
-from config import ARUCO_CONFIG, CHECKERBOARD_CONFIG, CALIBRATION_CONFIG, get_data_path
+from handeye.calibration.feature_extractor import ArucoDetector, CheckerboardExtractor
+from handeye.calibration.transforms import mat_to_pose
+from handeye.config import ARUCO_CONFIG, CHECKERBOARD_CONFIG, CALIBRATION_CONFIG, get_data_path
 
 
 class CaptureFrameData(TypedDict, total=False):

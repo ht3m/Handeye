@@ -9,14 +9,16 @@ import os
 import numpy as np
 from typing import cast
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 
-from device_manager import DeviceManager
-from data_collector import CalibDataCollector
-from calibration_solver import CalibrationSolver
-from error_calculator import ErrorCalculator
-from result_visualizer import ResultVisualizer
-from config import (
+from handeye.device_manager import DeviceManager
+from handeye.data_collector import CalibDataCollector
+from handeye.calibration_solver import CalibrationSolver
+from handeye.error_calculator import ErrorCalculator
+from handeye.result_visualizer import ResultVisualizer
+from handeye.config import (
     CALIBRATION_BACKEND,
     CALIBRATION_CONFIG,
     CALIBRATION_MODE,

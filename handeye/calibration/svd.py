@@ -13,7 +13,7 @@ from typing import Dict, List, Optional
 import cv2
 import numpy as np
 
-from config import get_svd_data_path
+from handeye.config import get_svd_data_path
 
 
 @dataclass

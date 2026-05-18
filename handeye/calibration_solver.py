@@ -6,16 +6,13 @@
 
 import numpy as np
 import os
-import sys
 import cv2
 from typing import Any, Dict, List, Mapping, Optional, Protocol, Sequence, Tuple, cast
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
-from calibration.solver_axxb import HandEyeSolver
-from calibration.optimizer import HandEyeOptimizer
-from calibration.transforms import invert_transform
-from config import CHECKERBOARD_CONFIG, CALIBRATION_CONFIG, get_results_path, REALSENSE_CONFIG
+from handeye.calibration.solver_axxb import HandEyeSolver
+from handeye.calibration.optimizer import HandEyeOptimizer
+from handeye.calibration.transforms import invert_transform
+from handeye.config import CHECKERBOARD_CONFIG, CALIBRATION_CONFIG, get_results_path, REALSENSE_CONFIG
 
 
 class DataCollectorProtocol(Protocol):

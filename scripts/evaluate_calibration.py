@@ -8,17 +8,19 @@ from typing import Any, Dict, List, cast
 
 import numpy as np
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 
-from config import (  # noqa: E402
+from handeye.config import (  # noqa: E402
     CALIBRATION_BACKEND,
     CALIBRATION_MODE,
     get_results_path,
     validate_calibration_settings,
 )
-from data_collector import CalibDataCollector  # noqa: E402
-from device_manager import DeviceManager  # noqa: E402
-from error_calculator import ErrorCalculator  # noqa: E402
+from handeye.data_collector import CalibDataCollector  # noqa: E402
+from handeye.device_manager import DeviceManager  # noqa: E402
+from handeye.error_calculator import ErrorCalculator  # noqa: E402
 
 
 def _load_transform(mode: str) -> np.ndarray:

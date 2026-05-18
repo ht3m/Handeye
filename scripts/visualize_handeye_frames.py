@@ -16,10 +16,12 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.lines import Line2D
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 
-from calibration.transforms import invert_transform  # noqa: E402
-from config import CALIBRATION_MODE, get_results_path  # noqa: E402
+from handeye.calibration.transforms import invert_transform  # noqa: E402
+from handeye.config import CALIBRATION_MODE, get_results_path  # noqa: E402
 
 
 AXIS_COLORS = ("red", "green", "blue")

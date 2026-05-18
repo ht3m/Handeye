@@ -5,16 +5,12 @@
 """
 
 import numpy as np
-import sys
-import os
 from typing import Optional, cast
 
 # 添加项目根目录到路径
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
-from robot.ur_robot import URRobot
-from camera.realsense import RealSenseCamera
-from config import UR5_CONFIG, REALSENSE_CONFIG
+from handeye.robot.ur_robot import URRobot
+from handeye.camera.realsense import RealSenseCamera
+from handeye.config import UR5_CONFIG, REALSENSE_CONFIG
 
 
 class DeviceManager:

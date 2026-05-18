@@ -9,7 +9,7 @@ import os
 from typing import Dict, List, Optional
 
 # 项目根目录
-PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # UR5 机械臂配置
 UR5_CONFIG = {
@@ -19,6 +19,9 @@ UR5_CONFIG = {
     'default_velocity': 1.05,
     'default_acceleration': 1.4,
 }
+
+# Backward-compatible name used by older test utilities.
+UR3_CONFIG = UR5_CONFIG
 
 # RealSense D405 相机配置
 REALSENSE_CONFIG = {
@@ -34,6 +37,18 @@ REALSENSE_CONFIG = {
 }
 
 # ArUco 标定板配置
+APRILTAG_TEST_CONFIG = {
+    'tag_family': 'tag36h11',
+    'tag_size': 0.04,
+    'target_tag_id': 0,
+    'decision_margin_threshold': 20.0,
+    'axis_length': 0.03,
+    't_tag_tcp_target': [0.0, 0.0, 0.1, 0.0, 0.0, 0.0],
+    'rtde_velocity': 0.3,
+    'rtde_acceleration': 0.3,
+    'dry_run': False,
+}
+
 ARUCO_CONFIG = {
     'dictionary': 'DICT_ARUCO_ORIGINAL',  # ArUco 字典类型 (OpenCV 5x5)
     'marker_id': 996,                      # 目标 ArUco 标记 ID
