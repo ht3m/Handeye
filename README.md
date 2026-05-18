@@ -1,146 +1,198 @@
-# 手眼标定系统
+# Handeye Calibration
 
-基于 UR3 机械臂和 Intel RealSense D405 相机的手眼标定工具。
+UR robot and Intel RealSense D405 hand-eye calibration toolkit. The current workflow targets an Eye-on-Hand setup with an ArUco marker, and keeps Eye-to-Hand utilities and offline evaluation scripts available for experiments.
 
-## 设备
+## Features
 
-- **机械臂**: UR3 (TCP/IP, 端口 30003)
-- **相机**: Intel RealSense D405
+- Collect synchronized robot TCP poses and RealSense RGB-D frames.
+- Detect an ArUco calibration target with OpenCV.
+- Solve hand-eye calibration with an AX=XB based solver and optional nonlinear refinement.
+- Save calibration outputs under `results/<mode>/`.
+- Evaluate a saved calibration with independent validation samples.
+- Visualize TCP and camera optical frames before running detailed error measurements.
 
-## 项目结构
+## Hardware
 
-```
+- Robot: UR series robot reachable through TCP port `30003`.
+- Camera: Intel RealSense D405.
+- Target: ArUco marker configured in [handeye/config.py](handeye/config.py).
+
+## Project Layout
+
+```text
 handeye/
-├── main.py                 # 主入口程序
-├── config.py               # 配置文件
-├── device_manager.py       # 设备连接管理
-├── data_collector.py       # 数据采集模块
-├── calibration_solver.py   # AX=XB 标定求解
-├── error_calculator.py     # 误差计算
-├── result_visualizer.py    # 结果可视化
-├── calibration/            # 底层算法
-|   ├── svd.py             # SVD算法
-│   ├── solver_axxb.py     # SVD求解器
-│   ├── optimizer.py       # 非线性优化
-|   ├── transforms.py    # 坐标变换工具
-│   └── feature_extractor.py # 棋盘格角点检测
-├── robot/                  # 机械臂驱动
-│   └── ur_robot.py        # UR3通信
-├── camera/                 # 相机驱动
-│   └── realsense.py       # D405驱动
-├── data/                   # 标定数据存储
-└── results/                # 标定结果存储
+  calibration/                 # solvers, optimizer, transforms, feature extraction
+  camera/                      # RealSense camera wrapper
+  robot/                       # UR TCP pose reader
+  calibration_solver.py        # calibration pipeline
+  data_collector.py            # capture and persistence workflow
+  device_manager.py            # robot/camera connection manager
+  error_calculator.py          # validation metrics
+  result_visualizer.py         # trajectory and error plots
+  config.py                    # project configuration
+
+scripts/
+  main.py                      # online data collection and calibration
+  evaluate_calibration.py      # collect validation samples and evaluate result
+  offline_calibrate_and_evaluate.py
+  visualize_handeye_frames.py  # local TCP/camera frame sanity check
+
+tests/
+  capture_svd_data.py
+  move_tcp_eye_to_hand_apriltag.py
+
+data/                          # captured samples, ignored by git
+results/                       # calibration results
 ```
 
-## 安装
+## Installation
 
-```bash
-pip install -r requirements.txt
+Use Python 3.10 or newer. A virtual environment is recommended.
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
 ```
 
-## 配置 (config.py)
+If `pyrealsense2` installation fails, install the Intel RealSense SDK for your platform first, then reinstall the Python requirements.
 
-```python
-# 机械臂IP
-UR3_CONFIG = {'tcp_host_ip': '192.168.56.102', 'tcp_port': 30003}
+## Configuration
 
-# 棋盘格参数
-CHECKERBOARD_CONFIG = {
-    'size': (11, 8),        # 内角点数量
-    'square_size': 0.006,   # 方格大小(米)
-    'board_to_base_rough': [x, y, z, rx, ry, rz],  # Eye-on-Hand粗略位姿
-    'board_to_tcp_rough': [x, y, z, rx, ry, rz],   # Eye-to-Hand粗略位姿
-}
+Edit [handeye/config.py](handeye/config.py) before collecting data.
 
-# AprilTag参数
-APRILTAG_CONFIG = {
-    'family': 'tag36h11',
-    'tag_size': 0.03,  # 米
-    'target_tag_id': 1,
-    'decision_margin_threshold': 20.0,
-    'min_area_ratio': 0.0005,
-}
+Important fields:
+
+- `UR5_CONFIG['tcp_host_ip']`: robot controller IP.
+- `UR5_CONFIG['tcp_port']`: robot TCP port, usually `30003`.
+- `REALSENSE_CONFIG`: camera stream size and FPS.
+- `ARUCO_CONFIG['dictionary']`: OpenCV ArUco dictionary name.
+- `ARUCO_CONFIG['marker_id']`: target marker ID.
+- `ARUCO_CONFIG['marker_size']`: marker side length in meters.
+- `CALIBRATION_MODE`: `eye_on_hand` or `eye_to_hand`.
+- `CALIBRATION_BACKEND`: currently `aruco` for the main workflow.
+
+## Usage
+
+Run commands from the repository root.
+
+### 1. Collect Data and Calibrate
+
+```powershell
+python scripts\main.py
 ```
 
-## 使用方法
+Interactive keys during capture:
 
-### 运行程序
+- `Space`: detect the target in the current frame.
+- `Enter`: save the current accepted detection.
+- `Backspace`: cancel the pending detection.
+- `Esc`: finish collection.
 
-```bash
-python main.py
+At least `CALIBRATION_CONFIG['min_calibration_points']` valid samples are required.
+
+### 2. Inspect the TCP-Camera Relationship
+
+Use this before detailed error measurement to check whether the transform matches the physical mount.
+
+```powershell
+python scripts\visualize_handeye_frames.py --mode eye_on_hand
 ```
 
-### 操作流程
+Useful options:
 
-1. **选择模式**: 输入 `1` (Eye-on-Hand) 或 `2` (Eye-to-Hand)
-2. **选择标定板**：输入 `1` (棋盘格) 或 `2` (AprilTag)
-3. **自动连接**: 连接 UR3 和 D405
-4. **数据采集**:
-   - 人工移动机械臂到新位置（示教器人工示教）
-   - 按 `Space` 检测角点并显示结果
-   - 按 `Enter` 保存当前有效检测帧和TCP位姿
-   - 按 `Esc` 退出采集
-   - 至少采集 6 帧（建议更多）
-5. **自动计算**: 基于 AX=XB 的 SVD 求解
-6. **误差报告**: 显示位置参考误差 + 全角点重投影误差
-7. **可视化**: 3D显示坐标系，误差分布图
-
-## 标定模式
-
-| 模式        | 说明       | 求解目标       |
-| ----------- | ---------- | -------------- |
-| Eye-on-Hand | 相机在末端 | 相机→TCP 变换  |
-| Eye-to-Hand | 相机固定   | 相机→基座 变换 |
-
-## 粗略位姿用途
-
-- 仅用于**可视化参考**显示标定板位置
-- 仅用于**误差计算**作为参考对比
-- **不参与**标定求解
-
-## 数据输出
-
-```
-results/{mode}/
-├── handeye_transform.txt  # 手眼变换矩阵 (4x4)
-├── depth_scale.txt       # 深度缩放因子
-└── calibration_info.txt  # 详细信息
+```powershell
+python scripts\visualize_handeye_frames.py --mode eye_on_hand --inverse
+python scripts\visualize_handeye_frames.py --transform results\eye_on_hand\handeye_transform.txt
+python scripts\visualize_handeye_frames.py --mode eye_on_hand --save results\eye_on_hand\frames.png --no-show
 ```
 
-## 误差指标
+In the plot:
 
-- **位置参考误差**: 与粗略先验位姿对比（仅参考）
-- **旋转参考误差**: 与粗略先验位姿对比（仅参考）
-- **重投影误差**: 基于棋盘格全部角点的像素残差统计
+- TCP axes show the robot tool coordinate system.
+- Camera axes show the OpenCV optical frame.
+- Camera Z is the optical forward direction.
+- The dashed line shows the offset from TCP origin to camera optical center.
 
-## SVD特征实验 (data/svd)
+### 3. Evaluate a Saved Calibration
 
-新增了基于 RealSense 的 RGB-D 保存与离线 SVD 特征提取流程，所有实验数据统一保存到 `data/svd`。
-
-### 1) 采集RGB-D帧
-
-```bash
-python tests/capture_svd_data.py
+```powershell
+python scripts\evaluate_calibration.py
 ```
 
-按键说明:
+This loads `results/<mode>/handeye_transform.txt`, collects independent validation samples, and prints position and rotation consistency errors.
 
-- `Space`: 保存当前一帧到 `data/svd/images`
-- `Q` 或 `Esc`: 退出
+### 4. Offline Calibration and Evaluation
 
-输出文件:
-
-- `data/svd/images/rgb_XXX.png`
-- `data/svd/images/depth_XXX.npy`
-- `data/svd/images/timestamps.csv`
-- `data/svd/images/camera_intrinsics.json`
-
-### 2) 离线SVD特征提取
-
-```bash
-python -m calibration.svd
+```powershell
+python scripts\offline_calibrate_and_evaluate.py
 ```
 
-输出文件:
+This reads already saved samples from `data/<mode>/` and writes results to `results/<mode>/`.
 
-- `data/svd/svd_features.csv`
+### 5. SVD Experiment Utilities
+
+Capture RGB-D samples:
+
+```powershell
+python tests\capture_svd_data.py
+```
+
+Analyze saved SVD samples:
+
+```powershell
+python -m handeye.calibration.svd
+```
+
+## Outputs
+
+Calibration results are written to:
+
+```text
+results/<mode>/
+  handeye_transform.txt   # 4x4 homogeneous transform
+  depth_scale.txt         # optimized depth scale
+  calibration_info.txt    # summary
+```
+
+For Eye-on-Hand, `handeye_transform.txt` is interpreted by the visualization script as `T_tcp_camera`, the camera pose in the TCP frame.
+
+## Data Format
+
+Captured samples are stored under:
+
+```text
+data/<mode>/
+  poses/
+    tcp_001.txt
+    tag_pose_001.txt
+    tag_corners_001.txt
+  images/
+    rgb_001.png
+    depth_001.npy
+```
+
+`data/` is ignored by git because it may contain large capture data.
+
+## Development
+
+Run a syntax check without writing `__pycache__`:
+
+```powershell
+python -c "import ast, pathlib; files=list(pathlib.Path('scripts').glob('*.py'))+list(pathlib.Path('handeye').rglob('*.py'))+list(pathlib.Path('tests').glob('*.py')); [ast.parse(p.read_text(encoding='utf-8'), filename=str(p)) for p in files]; print(f'AST syntax check passed: {len(files)} files')"
+```
+
+Run type checking:
+
+```powershell
+mypy handeye scripts tests
+```
+
+## Troubleshooting
+
+- `ModuleNotFoundError: cv2.aruco`: install `opencv-contrib-python`, not only `opencv-python`.
+- RealSense connection fails: check USB connection, RealSense SDK installation, and whether another process is using the camera.
+- Robot connection fails: check `UR5_CONFIG['tcp_host_ip']`, network route, and controller port `30003`.
+- Plot shows the camera behind or flipped relative to the mount: verify whether the transform direction is `T_tcp_camera`; try `--inverse` only as a diagnostic.
+- Changed code but behavior looks old: Python normally refreshes `.pyc` automatically. Delete `__pycache__` only when diagnosing unusual import behavior.

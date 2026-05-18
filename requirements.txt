@@ -1,21 +1,19 @@
-# Python version
-python==3.10.20
+# Runtime dependencies
+# Python: 3.10 or newer is recommended.
 
-# Core dependencies
-numpy==2.2.6
-opencv-python==4.13.0.92
-scipy==1.15.3
-matplotlib==3.10.8
+numpy>=2.2,<3.0
+scipy>=1.15,<2.0
+matplotlib>=3.10,<4.0
 
-# 3D visualization
-open3d==0.19.0
+# OpenCV ArUco requires the contrib package.
+opencv-contrib-python>=4.10,<5.0
 
-# RealSense camera
-pyrealsense2==2.56.5.9235
+# Intel RealSense D405 SDK binding.
+pyrealsense2>=2.56,<3.0
 
-# AprilTag and UR RTDE
-pyapriltags>=3.4.0,<4.0.0
-ur-rtde==1.6.0
+# Optional experiment / robot-control utilities used by tests/.
+pyapriltags>=3.4,<4.0
+ur-rtde>=1.6,<2.0
 
-# Type checking
-mypy==1.8.0
+# Development tools.
+mypy>=1.8,<2.0
