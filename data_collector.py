@@ -5,6 +5,7 @@ Data collection module - UR5 + D405 + ArUco / Checkerboard
 Supports teach-by-demo with keyboard workflow:
     - Space: detect target (ArUco marker / checkerboard corners)
     - Enter: save last successful detection
+    - Backspace: cancel last successful detection
     - Esc: exit collection loop
 """
 
@@ -41,6 +42,8 @@ class CaptureFrameData(TypedDict, total=False):
     tag_pose: np.ndarray
     tag_id: int
     tag_corners: np.ndarray
+    rvec: np.ndarray
+    tvec: np.ndarray
 
 
 class SavedFrameData(TypedDict):
@@ -84,6 +87,7 @@ class CalibDataCollector:
         aruco_dict = str(ARUCO_CONFIG['dictionary'])
         aruco_marker_size = float(cast(float, ARUCO_CONFIG['marker_size']))
         aruco_marker_id = int(cast(int, ARUCO_CONFIG['marker_id']))
+        self.aruco_axis_length = max(aruco_marker_size * 0.5, 1e-6)
         self.aruco_detector = ArucoDetector(
             dictionary_name=aruco_dict,
             marker_size=aruco_marker_size,
@@ -112,6 +116,7 @@ class CalibDataCollector:
 
         # 最新有效的检测结果, Space 触发检测, Enter 触发保存
         self._pending_detection: Optional[CaptureFrameData] = None
+        self._memory_data: List[SavedFrameData] = []
         min_pts = CALIBRATION_CONFIG.get('min_calibration_points', 6)
         self.min_frames_required = max(6, int(cast(int, min_pts)))
 
@@ -220,6 +225,8 @@ class CalibDataCollector:
             'tag_pose': result['tag_pose'],
             'tag_id': result['tag_id'],
             'tag_corners': result['tag_corners'],
+            'rvec': result['rvec'],
+            'tvec': result['tvec'],
             'corners': None,
             'corners_refined': None
         }
@@ -302,6 +309,34 @@ class CalibDataCollector:
 
     # ==================== 交互操作 ====================
 
+    def save_frame_to_memory(self, frame_data: 'CaptureFrameData') -> bool:
+        """Store one accepted sample in memory for evaluation runs."""
+        if not frame_data.get('success', False):
+            print("  [X] Target detection failed; cannot store sample.")
+            return False
+
+        tcp_pose = self.robot.get_transform_matrix()
+        tag_pose: Optional[np.ndarray] = None
+        if self.backend == 'aruco':
+            tag_pose_np = np.asarray(frame_data.get('tag_pose'), dtype=np.float64)
+            if tag_pose_np.shape != (4, 4):
+                print("  [X] ArUco pose is invalid; cannot store sample.")
+                return False
+            tag_pose = tag_pose_np
+
+        idx = f"{len(self._memory_data) + 1:03d}"
+        self._memory_data.append({
+            'tcp': tcp_pose,
+            'corners': frame_data.get('corners_refined'),
+            'tag_pose': tag_pose,
+            'rgb': frame_data.get('rgb'),
+            'depth': frame_data.get('depth'),
+            'index': idx,
+        })
+        self.frame_count += 1
+        print(f"  [OK] Evaluation sample {idx} accepted in memory.")
+        return True
+
     def detect_current_frame(self) -> bool:
         """采集一帧并检测, 显示结果供用户确认"""
         frame_data = self.capture_and_detect()
@@ -328,6 +363,24 @@ class CalibDataCollector:
             cv2.polylines(rgb, [pts], isClosed=True, color=(0, 255, 0), thickness=2)
             center = np.mean(pts, axis=0).astype(int)
             cv2.circle(rgb, tuple(center), 6, (0, 0, 255), -1)
+            rvec = frame_data.get('rvec')
+            tvec = frame_data.get('tvec')
+            tag_pose = frame_data.get('tag_pose')
+            if (rvec is None or tvec is None) and tag_pose is not None:
+                tag_pose_np = np.asarray(tag_pose, dtype=np.float64)
+                if tag_pose_np.shape == (4, 4):
+                    rvec, _ = cv2.Rodrigues(tag_pose_np[:3, :3])
+                    tvec = tag_pose_np[:3, 3].reshape(3, 1)
+            if rvec is not None and tvec is not None:
+                cv2.drawFrameAxes(
+                    rgb,
+                    self.intrinsics,
+                    self.dist_coeffs,
+                    np.asarray(rvec, dtype=np.float64).reshape(3, 1),
+                    np.asarray(tvec, dtype=np.float64).reshape(3, 1),
+                    self.aruco_axis_length,
+                    3
+                )
             cv2.putText(
                 rgb,
                 f'ArUco ID={tag_id}',
@@ -337,8 +390,17 @@ class CalibDataCollector:
                 (0, 255, 255),
                 2
             )
+            cv2.putText(
+                rgb,
+                'Enter=save  Backspace=cancel  Space=detect again  Esc=exit',
+                (10, 30),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.7,
+                (255, 255, 255),
+                2
+            )
             cv2.imshow('ArUco Detection Result', rgb)
-            cv2.waitKey(100)
+            cv2.waitKey(1)
             return
 
         # Checkerboard 可视化
@@ -380,7 +442,7 @@ class CalibDataCollector:
 
                 preview = rgb.copy()
                 backend_label = "ArUco" if self.backend == 'aruco' else "Checkerboard"
-                target_hint = f"Space: detect {backend_label}  Enter: save  Esc: exit"
+                target_hint = f"Space: detect {backend_label}  Enter: save  Backspace: cancel  Esc: exit"
                 cv2.putText(preview, target_hint, (10, 30),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
                 cv2.putText(
@@ -409,7 +471,7 @@ class CalibDataCollector:
 
             preview = rgb.copy()
             backend_label = "ArUco" if self.backend == 'aruco' else "Checkerboard"
-            target_hint = f"Space: detect {backend_label}  Enter: save  Esc: exit"
+            target_hint = f"Space: detect {backend_label}  Enter: save  Backspace: cancel  Esc: exit"
             cv2.putText(preview, target_hint, (10, 30),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
             cv2.putText(
@@ -447,7 +509,7 @@ class CalibDataCollector:
         with self._frame_lock:
             return self._latest_frame.copy() if self._latest_frame is not None else None
 
-    def collect_loop(self) -> int:
+    def collect_loop(self, save_to_disk: bool = True, enforce_minimum: bool = True) -> int:
         """
         循环采集模式: 反复执行单帧采集直到用户选择退出
 
@@ -488,22 +550,39 @@ class CalibDataCollector:
                     print("[!] 没有有效检测可保存。请先按 Space 检测。")
                     continue
 
-                saved = self.save_frame(self._pending_detection)
+                saved = (
+                    self.save_frame(self._pending_detection)
+                    if save_to_disk
+                    else self.save_frame_to_memory(self._pending_detection)
+                )
                 if saved:
                     self._pending_detection = None
                     detection_win = 'ArUco Detection Result' if self.backend == 'aruco' else 'Checkerboard Detection Result'
                     cv2.destroyWindow(detection_win)
+
+            elif key in (8, 127):
+                if self._pending_detection is not None:
+                    self._pending_detection = None
+                    detection_win = 'ArUco Detection Result' if self.backend == 'aruco' else 'Checkerboard Detection Result'
+                    cv2.destroyWindow(detection_win)
+                    print("[OK] Current detection canceled. Preview is active.")
+                else:
+                    print("[!] No pending detection to cancel.")
 
             time.sleep(0.01)
 
         self.stop_preview()
 
         print(f"\n采集完成，共 {self.frame_count} 帧")
-        if self.frame_count < self.min_frames_required:
+        if enforce_minimum and self.frame_count < self.min_frames_required:
             print(f"[!] 采集帧数 < 推荐最小值 ({self.min_frames_required})。")
         return self.frame_count
 
     # ==================== 数据读取 ====================
+
+    def get_memory_data(self) -> List['SavedFrameData']:
+        """Return samples accepted in memory during an evaluation run."""
+        return list(self._memory_data)
 
     def get_saved_data(self) -> List['SavedFrameData']:
         """

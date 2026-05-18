@@ -202,6 +202,28 @@ class ErrorCalculator:
         Returns:
             errors: 位置误差列表 (米)
         """
+        measured_positions: List[np.ndarray] = []
+        for tcp, cam_pose in zip(robot_poses, camera_poses):
+            if self.mode == 'eye_on_hand':
+                measured_positions.append((tcp @ X @ cam_pose)[:3, 3])
+            else:
+                T_base_marker = X @ cam_pose
+                T_tcp_marker = invert_transform(tcp) @ T_base_marker
+                measured_positions.append(T_tcp_marker[:3, 3])
+
+        if not measured_positions:
+            return np.array([], dtype=np.float64)
+
+        positions = np.asarray(measured_positions, dtype=np.float64)
+        if self.mode == 'eye_on_hand' and board_to_base is not None:
+            ref = pose_to_mat(board_to_base)[:3, 3]
+        elif self.mode == 'eye_to_hand' and board_to_tcp is not None:
+            ref = pose_to_mat(board_to_tcp)[:3, 3]
+        else:
+            ref = np.median(positions, axis=0)
+
+        return np.linalg.norm(positions - ref.reshape(1, 3), axis=1)
+
         errors: List[float] = []
 
         for tcp, cam_pose in zip(robot_poses, camera_poses):
@@ -251,6 +273,35 @@ class ErrorCalculator:
 
         若未提供粗略姿态，则以观测平均姿态作为参考。
         """
+        measured_list: List[np.ndarray] = []
+        for tcp, cam_pose in zip(robot_poses, camera_poses):
+            if self.mode == 'eye_on_hand':
+                measured_list.append(tcp @ X @ cam_pose)
+            else:
+                measured_list.append(invert_transform(tcp) @ X @ cam_pose)
+
+        if not measured_list:
+            return np.array([], dtype=np.float64)
+
+        if self.mode == 'eye_on_hand' and board_to_base is not None:
+            T_ref = pose_to_mat(board_to_base)
+        elif self.mode == 'eye_to_hand' and board_to_tcp is not None:
+            T_ref = pose_to_mat(board_to_tcp)
+        else:
+            R_mean = np.mean(np.asarray([T[:3, :3] for T in measured_list]), axis=0)
+            U, _, Vt = np.linalg.svd(R_mean)
+            R_ref = U @ Vt
+            if np.linalg.det(R_ref) < 0:
+                U[:, -1] *= -1
+                R_ref = U @ Vt
+            T_ref = np.eye(4, dtype=np.float64)
+            T_ref[:3, :3] = R_ref
+
+        return np.array([
+            self._rotation_angle_error_rad(T[:3, :3], T_ref[:3, :3])
+            for T in measured_list
+        ], dtype=np.float64)
+
         errors_rad: List[float] = []
 
         if self.mode == 'eye_on_hand':

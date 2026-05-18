@@ -81,6 +81,8 @@ class ArucoDetector:
             'tag_pose': None,
             'tag_corners': None,
             'tag_id': None,
+            'rvec': None,
+            'tvec': None,
             'image': image
         }
 
@@ -130,6 +132,8 @@ class ArucoDetector:
         result['tag_pose'] = tag_pose
         result['tag_corners'] = tag_corners
         result['tag_id'] = int(ids[target_idx][0])
+        result['rvec'] = np.asarray(rvec, dtype=np.float64).reshape(3, 1)
+        result['tvec'] = np.asarray(tvec, dtype=np.float64).reshape(3, 1)
         return result
 
 

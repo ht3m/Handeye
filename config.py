@@ -50,6 +50,8 @@ CHECKERBOARD_CONFIG = {
 
 # 标定模式配置 (仅 Eye-on-Hand)
 CALIBRATION_MODES = ['eye_on_hand', 'eye_to_hand']
+CALIBRATION_MODE = 'eye_on_hand'  # eye_on_hand: 眼在手上; eye_to_hand: 眼在手外 / hand-to-eye
+CALIBRATION_BACKEND = 'aruco'
 
 # SVD 采集与特征分析配置
 SVD_CONFIG = {
@@ -88,6 +90,22 @@ def get_data_path(mode: str) -> Dict[str, str]:
 def get_results_path(mode: str) -> str:
     """获取指定模式的结果路径"""
     return os.path.join(PROJECT_ROOT, 'results', mode)
+
+
+def validate_calibration_settings() -> None:
+    """Validate user-facing calibration settings before devices are opened."""
+    if CALIBRATION_MODE not in CALIBRATION_MODES:
+        valid = ', '.join(CALIBRATION_MODES)
+        raise ValueError(
+            f"Invalid CALIBRATION_MODE={CALIBRATION_MODE!r}. "
+            f"Expected one of: {valid}"
+        )
+
+    if CALIBRATION_BACKEND != 'aruco':
+        raise ValueError(
+            f"Invalid CALIBRATION_BACKEND={CALIBRATION_BACKEND!r}. "
+            "This main workflow currently supports only 'aruco'."
+        )
 
 
 def get_svd_data_path() -> Dict[str, str]:

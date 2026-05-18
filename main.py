@@ -7,7 +7,7 @@
 import sys
 import os
 import numpy as np
-from typing import Sequence, cast
+from typing import cast
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -16,17 +16,30 @@ from data_collector import CalibDataCollector
 from calibration_solver import CalibrationSolver
 from error_calculator import ErrorCalculator
 from result_visualizer import ResultVisualizer
-from config import CALIBRATION_CONFIG
+from config import (
+    CALIBRATION_BACKEND,
+    CALIBRATION_CONFIG,
+    CALIBRATION_MODE,
+    validate_calibration_settings,
+)
 
 
-MODE = 'eye_on_hand'
-BACKEND = 'aruco'
+def _mode_display_name(mode: str) -> str:
+    if mode == 'eye_on_hand':
+        return 'Eye-on-Hand'
+    if mode == 'eye_to_hand':
+        return 'Eye-to-Hand'
+    return mode
 
 
 def main() -> None:
     """主函数"""
+    validate_calibration_settings()
+    mode = CALIBRATION_MODE
+    backend = CALIBRATION_BACKEND
+    mode_name = _mode_display_name(mode)
     print("=" * 50)
-    print(f"手眼标定系统 - UR5 + D405 + ArUco ({'Eye-on-Hand' if MODE == 'eye_on_hand' else 'Eye-to-Hand'})")
+    print(f"手眼标定系统 - UR5 + D405 + ArUco ({mode_name})")
     print("=" * 50)
 
     # 1. 连接设备
@@ -49,7 +62,7 @@ def main() -> None:
     print("数据采集 - ArUco 标定板")
     print("=" * 50)
 
-    collector = CalibDataCollector(robot, camera, MODE, backend=BACKEND)
+    collector = CalibDataCollector(robot, camera, mode, backend=backend)
     collector.collect_loop()
 
     min_required_cfg = CALIBRATION_CONFIG.get('min_calibration_points', 6)
@@ -62,10 +75,10 @@ def main() -> None:
 
     # 3. 标定计算
     solver = CalibrationSolver(
-        MODE,
+        mode,
         intrinsics=camera.intrinsics,
         dist_coeffs=getattr(camera, 'dist_coeffs', None),
-        backend=BACKEND
+        backend=backend
     )
     try:
         robot_poses, camera_poses, corners_2d_list, images = solver.load_data(collector)
@@ -76,6 +89,11 @@ def main() -> None:
         return
 
     result = solver.solve(robot_poses, camera_poses, corners_2d_list)
+    device_mgr.disconnect()
+    print("\n" + "=" * 50)
+    print("Calibration complete. Result saved; run evaluate_calibration.py for validation.")
+    print("=" * 50)
+    return
 
     # 4. 误差计算
     print("\n" + "=" * 50)
@@ -83,10 +101,10 @@ def main() -> None:
     print("=" * 50)
 
     error_calc = ErrorCalculator(
-        MODE,
+        mode,
         intrinsics=camera.intrinsics,
         dist_coeffs=camera.dist_coeffs,
-        backend=BACKEND
+        backend=backend
     )
 
     position_errors = error_calc.calculate_position_error(
@@ -105,7 +123,7 @@ def main() -> None:
     print("可视化")
     print("=" * 50)
 
-    visualizer = ResultVisualizer(MODE)
+    visualizer = ResultVisualizer(mode)
 
     visualizer.visualize(
         robot_poses, result['X'], result['z_scale'],
