@@ -31,6 +31,7 @@ if ROOT not in sys.path:
 
 from handeye.camera.realsense import RealSenseCamera
 from handeye.config import APRILTAG_TEST_CONFIG, UR3_CONFIG
+from handeye.transform_io import load_transform_matrix
 
 
 @dataclass
@@ -187,11 +188,7 @@ def _build_runtime_config(args: argparse.Namespace) -> RuntimeConfig:
 def _load_transform(path: str) -> np.ndarray:
     if not os.path.exists(path):
         raise FileNotFoundError(f"未找到手眼结果文件: {path}")
-    mat = np.loadtxt(path, dtype=np.float64)
-    mat = np.asarray(mat, dtype=np.float64)
-    if mat.shape != (4, 4):
-        raise ValueError(f"手眼结果矩阵形状错误: {mat.shape}, 期望 (4,4)")
-    return mat
+    return load_transform_matrix(path)
 
 
 def _pose_to_transform(pose: Sequence[float] | np.ndarray) -> np.ndarray:

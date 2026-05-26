@@ -49,9 +49,17 @@ class OfflineDataCollector:
             idx = tcp_file.split('_')[1].split('.')[0]
             tcp_path = os.path.join(poses_dir, tcp_file)
             tag_pose_path = os.path.join(poses_dir, f'tag_pose_{idx}.txt')
-            corners_path = os.path.join(poses_dir, f'corners_{idx}.txt')
+            corners_path = os.path.join(poses_dir, f'tag_corners_{idx}.txt')
             rgb_path = os.path.join(images_dir, f'rgb_{idx}.png')
             depth_path = os.path.join(images_dir, f'depth_{idx}.npy')
+
+            if not os.path.exists(rgb_path):
+                print(f"[WARN] Skip {idx}: missing RGB image, likely a removed old sample")
+                continue
+
+            if not os.path.exists(tag_pose_path) and not os.path.exists(corners_path):
+                print(f"[WARN] Skip {idx}: missing tag pose/corners data")
+                continue
 
             try:
                 tcp = np.loadtxt(tcp_path)
@@ -77,6 +85,7 @@ class OfflineDataCollector:
                 'index': idx,
             })
 
+        print(f"Loaded {len(data)} complete offline samples.")
         return data
 
 

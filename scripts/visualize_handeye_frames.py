@@ -22,6 +22,7 @@ if PROJECT_ROOT not in sys.path:
 
 from handeye.calibration.transforms import invert_transform  # noqa: E402
 from handeye.config import CALIBRATION_MODE, get_results_path  # noqa: E402
+from handeye.transform_io import load_transform_matrix  # noqa: E402
 
 
 AXIS_COLORS = ("red", "green", "blue")
@@ -80,10 +81,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def load_transform(path: str) -> np.ndarray:
-    transform = np.loadtxt(path, dtype=np.float64)
-    if transform.shape != (4, 4):
-        raise ValueError(f"Expected a 4x4 transform in {path}, got {transform.shape}")
-    return transform
+    return load_transform_matrix(path)
 
 
 def rotation_to_xyz_euler_deg(R: np.ndarray) -> np.ndarray:

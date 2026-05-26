@@ -13,6 +13,7 @@ from handeye.calibration.solver_axxb import HandEyeSolver
 from handeye.calibration.optimizer import HandEyeOptimizer
 from handeye.calibration.transforms import invert_transform
 from handeye.config import CHECKERBOARD_CONFIG, CALIBRATION_CONFIG, get_results_path, REALSENSE_CONFIG
+from handeye.transform_io import format_transform_matrix, save_transform_matrix
 
 
 class DataCollectorProtocol(Protocol):
@@ -312,7 +313,7 @@ class CalibrationSolver:
         os.makedirs(results_path, exist_ok=True)
 
         # 保存手眼变换矩阵
-        np.savetxt(os.path.join(results_path, 'handeye_transform.txt'), X, delimiter=' ')
+        save_transform_matrix(os.path.join(results_path, 'handeye_transform.txt'), X)
 
         # 保存深度缩放因子
         np.savetxt(os.path.join(results_path, 'depth_scale.txt'), np.array([z_scale]), delimiter=' ')
@@ -322,6 +323,6 @@ class CalibrationSolver:
             f.write(f"Mode: {self.mode}\n")
             f.write(f"Z-scale: {z_scale:.6f}\n")
             f.write(f"\nTransform (4x4):\n")
-            f.write(str(X))
+            f.write(format_transform_matrix(X))
 
         print(f"\n结果已保存至: {results_path}")

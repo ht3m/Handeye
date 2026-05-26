@@ -51,8 +51,8 @@ APRILTAG_TEST_CONFIG = {
 
 ARUCO_CONFIG = {
     'dictionary': 'DICT_ARUCO_ORIGINAL',  # ArUco 字典类型 (OpenCV 5x5)
-    'marker_id': 996,                      # 目标 ArUco 标记 ID
-    'marker_size': 0.10,                   # 标记边长 (米)
+    'marker_id': 159,                      # 目标 ArUco 标记 ID
+    'marker_size': 0.15,                   # 标记边长 (米)
 }
 
 # 标定板配置 (保留棋盘格配置供兼容)

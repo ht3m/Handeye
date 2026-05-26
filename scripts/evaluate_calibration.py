@@ -21,6 +21,7 @@ from handeye.config import (  # noqa: E402
 from handeye.data_collector import CalibDataCollector  # noqa: E402
 from handeye.device_manager import DeviceManager  # noqa: E402
 from handeye.error_calculator import ErrorCalculator  # noqa: E402
+from handeye.transform_io import load_transform_matrix  # noqa: E402
 
 
 def _load_transform(mode: str) -> np.ndarray:
@@ -28,10 +29,7 @@ def _load_transform(mode: str) -> np.ndarray:
     if not os.path.exists(path):
         raise FileNotFoundError(f"Missing calibration result: {path}")
 
-    X = np.asarray(np.loadtxt(path), dtype=np.float64)
-    if X.shape != (4, 4):
-        raise ValueError(f"Invalid hand-eye transform shape: {X.shape}; expected (4, 4)")
-    return X
+    return load_transform_matrix(path)
 
 
 def _load_z_scale(mode: str) -> float:
