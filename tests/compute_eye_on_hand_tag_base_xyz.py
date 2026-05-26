@@ -6,6 +6,7 @@ Transform convention used by this project:
     T_base_tag = T_base_tcp @ T_tcp_camera @ p_camera_tag
 
 The saved Eye-on-Hand hand-eye result is interpreted as T_tcp_camera.
+By default the current robot TCP pose is read automatically from UR5_CONFIG.
 Robot TCP pose uses the UR format [x, y, z, rx, ry, rz], where translation is
 in meters and rotation is a Rodrigues rotation vector in radians.
 """
@@ -13,6 +14,7 @@ in meters and rotation is a Rodrigues rotation vector in radians.
 from __future__ import annotations
 
 import argparse
+import ast
 import os
 import sys
 from typing import Sequence
@@ -32,7 +34,8 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Compute the tag center XYZ in the robot base frame from the current "
-            "TCP pose, Eye-on-Hand T_tcp_camera, and tag center in camera frame."
+            "robot TCP pose, Eye-on-Hand T_tcp_camera, and tag center in camera frame. "
+            "If no TCP source is provided, the TCP pose is read from the robot."
         )
     )
     tcp_group = parser.add_mutually_exclusive_group()
@@ -50,7 +53,7 @@ def _parse_args() -> argparse.Namespace:
     tcp_group.add_argument(
         "--tcp-from-robot",
         action="store_true",
-        help="Read the current TCP pose from the UR robot using handeye.config.UR5_CONFIG by default.",
+        help="Read the current TCP pose from the UR robot. This is also the default TCP source.",
     )
 
     tag_group = parser.add_mutually_exclusive_group()
@@ -86,13 +89,13 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--robot-ip",
         default=str(UR5_CONFIG.get("tcp_host_ip", "169.254.162.111")),
-        help="UR robot IP used with --tcp-from-robot.",
+        help="UR robot IP used when reading the current TCP pose.",
     )
     parser.add_argument(
         "--robot-port",
         type=int,
         default=int(UR5_CONFIG.get("tcp_port", 30003)),
-        help="UR robot TCP port used with --tcp-from-robot.",
+        help="UR robot TCP port used when reading the current TCP pose.",
     )
     parser.add_argument(
         "--quiet",
@@ -113,7 +116,11 @@ def _position_scale(unit: str) -> float:
 def _load_array(path: str) -> np.ndarray:
     if not os.path.exists(path):
         raise FileNotFoundError(f"File not found: {path}")
-    arr = np.loadtxt(path, dtype=np.float64)
+    try:
+        arr = np.loadtxt(path, dtype=np.float64)
+    except ValueError:
+        with open(path, "r", encoding="utf-8") as f:
+            arr = np.asarray(ast.literal_eval(f.read()), dtype=np.float64)
     return np.asarray(arr, dtype=np.float64)
 
 
@@ -145,11 +152,6 @@ def _read_numbers_from_prompt(prompt: str, expected_count: int) -> np.ndarray:
 
 
 def _resolve_base_tcp(args: argparse.Namespace) -> tuple[np.ndarray, str]:
-    if args.tcp_from_robot:
-        robot = URRobot(tcp_host_ip=args.robot_ip, tcp_port=args.robot_port)
-        tcp_pose = robot.get_tool_pose()
-        return pose_to_mat(tcp_pose), f"robot {args.robot_ip}:{args.robot_port}"
-
     if args.tcp_pose is not None:
         return _pose_vector_to_transform(args.tcp_pose, args.tcp_position_unit), "command line --tcp-pose"
 
@@ -163,11 +165,9 @@ def _resolve_base_tcp(args: argparse.Namespace) -> tuple[np.ndarray, str]:
             f"TCP pose file must contain 6 values or a 4x4 matrix, got shape {arr.shape}: {args.tcp_pose_file}"
         )
 
-    values = _read_numbers_from_prompt(
-        "Enter current TCP pose x y z rx ry rz (meters/radians unless --tcp-position-unit mm): ",
-        6,
-    )
-    return _pose_vector_to_transform(values, args.tcp_position_unit), "interactive input"
+    robot = URRobot(tcp_host_ip=args.robot_ip, tcp_port=args.robot_port)
+    tcp_pose = robot.get_tool_pose()
+    return pose_to_mat(tcp_pose), f"robot {args.robot_ip}:{args.robot_port}"
 
 
 def _resolve_camera_tag_point(args: argparse.Namespace) -> tuple[np.ndarray, str]:
