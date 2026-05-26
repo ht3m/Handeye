@@ -1,14 +1,15 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Compute tag center XYZ in robot base frame for an Eye-on-Hand setup.
+"""Compute ArUco center XYZ in robot base frame for an Eye-on-Hand setup.
 
 Transform convention used by this project:
     T_base_tag = T_base_tcp @ T_tcp_camera @ p_camera_tag
 
 The saved Eye-on-Hand hand-eye result is interpreted as T_tcp_camera.
-By default the current robot TCP pose is read automatically from UR5_CONFIG.
-Robot TCP pose uses the UR format [x, y, z, rx, ry, rz], where translation is
-in meters and rotation is a Rodrigues rotation vector in radians.
+By default this script reads the current TCP from the robot and detects the
+configured ArUco marker from the current RealSense frame. Robot TCP pose uses
+the UR format [x, y, z, rx, ry, rz], where translation is in meters and rotation
+is a Rodrigues rotation vector in radians.
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ import argparse
 import ast
 import os
 import sys
-from typing import Sequence
+from typing import Any, Sequence
 
 import numpy as np
 
@@ -26,16 +27,16 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 from handeye.calibration.transforms import pose_to_mat  # noqa: E402
-from handeye.config import UR5_CONFIG, get_results_path  # noqa: E402
+from handeye.config import ARUCO_CONFIG, REALSENSE_CONFIG, UR5_CONFIG, get_results_path  # noqa: E402
 from handeye.robot.ur_robot import URRobot  # noqa: E402
 
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Compute the tag center XYZ in the robot base frame from the current "
-            "robot TCP pose, Eye-on-Hand T_tcp_camera, and tag center in camera frame. "
-            "If no TCP source is provided, the TCP pose is read from the robot."
+            "Compute the configured ArUco center XYZ in the robot base frame. "
+            "By default, TCP pose is read from the robot and the ArUco pose is "
+            "detected from the current RealSense frame."
         )
     )
     tcp_group = parser.add_mutually_exclusive_group()
@@ -62,7 +63,7 @@ def _parse_args() -> argparse.Namespace:
         nargs=3,
         type=float,
         metavar=("X", "Y", "Z"),
-        help="Tag center XYZ in the camera frame. Unit is set by --tag-position-unit.",
+        help="Offline override: tag center XYZ in the camera frame. Unit is set by --tag-position-unit.",
     )
     tag_group.add_argument(
         "--tag-camera-file",
@@ -84,7 +85,19 @@ def _parse_args() -> argparse.Namespace:
         "--tag-position-unit",
         choices=("m", "mm"),
         default="m",
-        help="Translation unit for --tag-camera or vector --tag-camera-file. Default: m.",
+        help="Translation unit for offline --tag-camera or vector --tag-camera-file. Default: m.",
+    )
+    parser.add_argument(
+        "--camera-frames",
+        type=int,
+        default=60,
+        help="Maximum RealSense frames to try when detecting the configured ArUco marker. Default: 60.",
+    )
+    parser.add_argument(
+        "--warmup-frames",
+        type=int,
+        default=5,
+        help="RealSense frames to discard before detection. Default: 5.",
     )
     parser.add_argument(
         "--robot-ip",
@@ -139,18 +152,6 @@ def _pose_vector_to_transform(pose: Sequence[float], position_unit: str) -> np.n
     return pose_to_mat(pose_arr)
 
 
-def _read_numbers_from_prompt(prompt: str, expected_count: int) -> np.ndarray:
-    while True:
-        raw = input(prompt).strip().replace(",", " ")
-        try:
-            values = np.fromstring(raw, sep=" ", dtype=np.float64)
-        except ValueError:
-            values = np.array([], dtype=np.float64)
-        if values.shape == (expected_count,):
-            return values
-        print(f"Expected {expected_count} numbers, got {values.size}.")
-
-
 def _resolve_base_tcp(args: argparse.Namespace) -> tuple[np.ndarray, str]:
     if args.tcp_pose is not None:
         return _pose_vector_to_transform(args.tcp_pose, args.tcp_position_unit), "command line --tcp-pose"
@@ -170,6 +171,94 @@ def _resolve_base_tcp(args: argparse.Namespace) -> tuple[np.ndarray, str]:
     return pose_to_mat(tcp_pose), f"robot {args.robot_ip}:{args.robot_port}"
 
 
+def _cfg_int(config: dict[str, Any], key: str, default: int) -> int:
+    val = config.get(key, default)
+    if isinstance(val, bool):
+        return int(val)
+    if isinstance(val, (int, np.integer)):
+        return int(val)
+    if isinstance(val, float):
+        return int(val)
+    if isinstance(val, str):
+        return int(val)
+    raise TypeError(f"Config value {key!r} cannot be converted to int: {type(val)}")
+
+
+def _cfg_float(config: dict[str, Any], key: str, default: float) -> float:
+    val = config.get(key, default)
+    if isinstance(val, bool):
+        return float(int(val))
+    if isinstance(val, (int, float, np.integer, np.floating)):
+        return float(val)
+    if isinstance(val, str):
+        return float(val)
+    raise TypeError(f"Config value {key!r} cannot be converted to float: {type(val)}")
+
+
+def _create_realsense_from_config() -> Any:
+    from handeye.camera.realsense import RealSenseCamera
+
+    device_id = REALSENSE_CONFIG.get("device_id", None)
+    return RealSenseCamera(
+        width=_cfg_int(REALSENSE_CONFIG, "width", 1280),
+        height=_cfg_int(REALSENSE_CONFIG, "height", 720),
+        fps=_cfg_int(REALSENSE_CONFIG, "fps", 30),
+        device_id=None if device_id is None else str(device_id),
+    )
+
+
+def _detect_aruco_center_from_camera(max_frames: int, warmup_frames: int) -> tuple[np.ndarray, str]:
+    if max_frames <= 0:
+        raise ValueError("--camera-frames must be greater than 0")
+    if warmup_frames < 0:
+        raise ValueError("--warmup-frames must be >= 0")
+
+    from handeye.calibration.feature_extractor import ArucoDetector
+
+    dictionary_name = str(ARUCO_CONFIG["dictionary"])
+    marker_size = _cfg_float(ARUCO_CONFIG, "marker_size", 0.10)
+    marker_id = _cfg_int(ARUCO_CONFIG, "marker_id", 996)
+
+    camera = _create_realsense_from_config()
+    detector = ArucoDetector(
+        dictionary_name=dictionary_name,
+        marker_size=marker_size,
+        marker_id=marker_id,
+    )
+
+    camera.connect()
+    try:
+        if camera.intrinsics is None:
+            raise RuntimeError("RealSense intrinsics are not available after camera.connect().")
+
+        for _ in range(warmup_frames):
+            camera.get_data()
+
+        for frame_idx in range(1, max_frames + 1):
+            rgb, _depth = camera.get_data()
+            result = detector.detect_marker(rgb, camera.intrinsics, camera.dist_coeffs)
+            if not result.get("success", False):
+                continue
+
+            tag_pose = np.asarray(result["tag_pose"], dtype=np.float64)
+            if tag_pose.shape != (4, 4):
+                raise ValueError(f"Detected ArUco pose must be 4x4, got {tag_pose.shape}")
+            point = np.asarray(tag_pose[:3, 3], dtype=np.float64)
+            source = (
+                f"RealSense ArUco detection "
+                f"id={int(result['tag_id'])}, dictionary={dictionary_name}, "
+                f"marker_size={marker_size}m, frame={frame_idx}"
+            )
+            return point, source
+    finally:
+        camera.disconnect()
+
+    raise RuntimeError(
+        f"Failed to detect ArUco id={marker_id} from camera after {max_frames} frames. "
+        "Check ARUCO_CONFIG, marker visibility, focus, exposure, and marker size."
+    )
+
+
 def _resolve_camera_tag_point(args: argparse.Namespace) -> tuple[np.ndarray, str]:
     scale = _position_scale(args.tag_position_unit)
 
@@ -186,11 +275,7 @@ def _resolve_camera_tag_point(args: argparse.Namespace) -> tuple[np.ndarray, str
             f"Tag camera file must contain 3 values or a 4x4 matrix, got shape {arr.shape}: {args.tag_camera_file}"
         )
 
-    values = _read_numbers_from_prompt(
-        "Enter tag center in camera frame x y z (meters unless --tag-position-unit mm): ",
-        3,
-    )
-    return values * scale, "interactive input"
+    return _detect_aruco_center_from_camera(args.camera_frames, args.warmup_frames)
 
 
 def _transform_point(transform: np.ndarray, point_xyz: np.ndarray) -> np.ndarray:
@@ -220,7 +305,7 @@ def main() -> None:
     print(f"TCP source: {tcp_source}")
     print(f"Hand-eye file: {args.handeye_file}")
     print(f"Tag camera source: {tag_source}")
-    print("\nInput tag center in camera frame (m):")
+    print("\nResolved ArUco center in camera frame (m):")
     print(f"  x={p_camera_tag[0]: .9f}, y={p_camera_tag[1]: .9f}, z={p_camera_tag[2]: .9f}")
     print("\nOutput tag center in base frame:")
     print(f"  meters: x={p_base_tag[0]: .9f}, y={p_base_tag[1]: .9f}, z={p_base_tag[2]: .9f}")
